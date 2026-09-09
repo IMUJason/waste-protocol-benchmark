@@ -3,12 +3,11 @@
 
 Design notes:
   1. STRICT CALENDAR LAG: the entity-year grid is filled so that shift(1)
-     always selects the previous calendar year, never the previous observed
-     row; persistence uses the previous calendar year's observed value.
-  2. UNIT-INVARIANT GP/MR-GP: features and target are standardised inside the
-     kernel fit, so results do not depend on measurement units.
-  3. PREPROCESSING SCOPE: the "global" factor fits scaler/imputer on all rows
-     of the dataset (the leaky shortcut); "fold" fits on training rows only.
+     always selects the previous calendar year; persistence uses the
+     previous calendar year's observed value.
+  2. UNIT-INVARIANT GP/MR-GP: kernel inputs and target are standardised.
+  3. PREPROCESSING SCOPE: "global" fits on all rows (leaky shortcut);
+     "fold" fits on training rows only.
 
 Design:
   Datasets : A = 21-city China CDW panel (2015-2024)
@@ -303,6 +302,7 @@ def fit_one_model(model: str, seed: int, Xtr, ytr, Xte, d, tr_idx, te_idx):
 
 
 def run_cell(ds: str, spec: Spec, d, validation: str, timing: str, subcomp, preproc: str, seed: int):
+    model_key = f"{validation}/{timing}/{subcomp}/{preproc}/s{seed}"
     X = d["Xc"] if timing == "contemporaneous" else d["Xl"]
     feat_cols = list(X.columns)
     L = None
@@ -346,6 +346,7 @@ def run_cell(ds: str, spec: Spec, d, validation: str, timing: str, subcomp, prep
                 out[model] = None
         return te, out
 
+    n_eval = sum(len(te) for _, te in splits)
     with ThreadPoolExecutor(max_workers=N_THREADS) as ex:
         for te, out in ex.map(one_split, list(enumerate(splits))):
             for model, pred in out.items():
@@ -358,6 +359,10 @@ def run_cell(ds: str, spec: Spec, d, validation: str, timing: str, subcomp, prep
                         subcomp=("na" if d["Lc"] is None else subcomp), preproc=preproc,
                         seed=seed, entity=d["ents"][i], year=int(d["years"][i]),
                         y_true=float(d["y"][i]), y_pred=float(pred[j])))
+    # integrity: every model must cover every evaluation row exactly once
+    got = {m: sum(1 for r in rows if r["model"] == m) for m in MODELS}
+    for m, n in got.items():
+        assert n == n_eval, f"{ds}/{model_key}: {m} produced {n} rows, expected {n_eval}"
     return rows, log
 
 
@@ -428,8 +433,12 @@ def main() -> None:
         print(f"[{ds}] done: {n_cells} protocol cells", flush=True)
         pd.DataFrame(cell_rows).to_csv(cells_path, index=False)   # flush per dataset
 
+    pdf = pd.DataFrame(all_preds)
+    dup = pdf.duplicated(subset=["dataset", "model", "validation", "timing",
+                                 "subcomp", "preproc", "seed", "entity", "year"])
+    assert not dup.any(), f"duplicate prediction keys: {int(dup.sum())} rows"
     pd.DataFrame(cell_rows).to_csv(cells_path, index=False)
-    pd.DataFrame(all_preds).to_parquet(pred_path, index=False)
+    pdf.to_parquet(pred_path, index=False)
     with open(OUT / "engine_log.txt", "w", encoding="utf-8") as f:
         f.write("\n".join(log_lines) + f"\ntotal {time.time()-t0:.1f}s\n")
     print(f"cells -> {cells_path} ({len(cell_rows)} rows)")

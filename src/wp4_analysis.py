@@ -144,7 +144,7 @@ def boot_rmse_ratio(st_m: pd.DataFrame, st_p: pd.DataFrame, B=B_BOOT) -> np.ndar
         pick = RNG.choice(np.arange(len(ents)), size=len(ents), replace=True)
         rm = np.sqrt(m_res[pick].sum() / m_n[pick].sum())
         rp = np.sqrt(p_res[pick].sum() / p_n[pick].sum())
-        out[b] = rm / rp
+        out[b] = rm / rp if rp > 0 else np.nan
     return out
 
 
@@ -254,7 +254,7 @@ def main() -> None:
         lo, hi = np.nanpercentile(taus, 2.5), np.nanpercentile(taus, 97.5)
         return dict(tau=float(tau), n_models=len(stats_dict),
                     tau_lo=float(lo), tau_hi=float(hi),
-                    ci_excludes_1=bool(hi < 1))
+                    ci_excludes_1=bool(hi < 1 - 1e-9))
 
     rank_rows = []
     for ds in datasets:

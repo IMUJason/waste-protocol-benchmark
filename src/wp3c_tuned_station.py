@@ -5,7 +5,7 @@ RF and XGBoost, addressing the "untuned strawman" objection.
 Design (pre-specified):
   models : rf_tuned (grid: max_depth {None,6} x min_samples_leaf {1,5}),
            xgb_tuned (grid: max_depth {3,6} x learning_rate {0.05,0.15})
-  selection: forward validation inside each training fold;
+  selection: 3-fold CV inside each training fold (never on test rows);
              best config refit on full training fold
   stations: honest = (rolling_origin, lagged, off, fold)
             common = (loocv, contemporaneous, on-if-exists, global)
@@ -137,8 +137,7 @@ def main() -> None:
         if ds == "A17":
             if not (D1 / "data" / "dataset_A17_18city.parquet").exists():
                 a = pd.read_parquet(D1 / "data" / "dataset_A_21city.parquet")
-                drop = {"广州", "重庆", "西安"}  # Guangzhou, Chongqing, Xi'an
-                a = a[~a["city"].isin(drop)].reset_index(drop=True)
+                a = a[~a["city"].isin({"广州", "重庆", "西安"})].reset_index(drop=True)
                 a.to_parquet(D1 / "data" / "dataset_A17_18city.parquet", index=False)
             eng.SPECS["A17"] = eng.Spec("A17", D1 / "data" / "dataset_A17_18city.parquet",
                                         "city", "cdw_total_kt",
@@ -159,20 +158,24 @@ def main() -> None:
     preds.to_parquet(pred_path, index=False)
 
     # analysis table
+    def persistence_reference(preds, ds, station):
+        """Persistence rows for a station: seed 0, one subcomp variant, deduped.
+        For leak stations use subcomp='on'; otherwise prefer 'off' (leak-capable
+        datasets) falling back to 'na' (datasets without target-derived features)."""
+        v, t, s, p = station_for(ds)[station]
+        pm = preds[(preds.dataset == ds) & (preds.model == "persistence")
+                   & (preds.validation == v) & (preds.timing == t)
+                   & (preds.preproc == p) & (preds.seed == 0)]
+        want = "on" if s == "on" else ("off" if (pm.subcomp == "off").any() else "na")
+        pm = pm[pm.subcomp == want].drop_duplicates(subset=["entity", "year"])
+        assert len(pm) > 0, f"no persistence reference for {ds}/{station}"
+        return pm
+
     out_rows = []
     for ds in ["C0", "A", "A17", "B"]:
         st_map = station_for(ds)
-        # persistence per station
         for st, (v, t, s, p) in st_map.items():
-            pm = preds[(preds.dataset == ds) & (preds.model == "persistence")
-                       & (preds.validation == v) & (preds.timing == t)
-                       & (preds.preproc == p) & (preds.seed == 0)]
-            pm = pm[pm.subcomp == "na"] if s != "on" else pm[pm.subcomp == "on"]
-            if len(pm) == 0:
-                pm = preds[(preds.dataset == ds) & (preds.model == "persistence")
-                           & (preds.validation == v) & (preds.timing == t)
-                           & (preds.seed == 0)]
-                pm = pm[pm.subcomp != "on"]
+            pm = persistence_reference(preds, ds, st)
             rmse_p = float(np.sqrt(((pm.y_true - pm.y_pred) ** 2).mean()))
             ybar = pm.y_true.mean()
             r2_p = 1 - ((pm.y_true - pm.y_pred) ** 2).sum() / ((pm.y_true - ybar) ** 2).sum()
@@ -183,8 +186,8 @@ def main() -> None:
                 m = preds[(preds.dataset == ds) & (preds.model == mdl)
                           & (preds.validation == v) & (preds.timing == t)
                           & (preds.subcomp == s) & (preds.preproc == p) & (preds.seed == 0)]
-                if len(m) == 0:
-                    continue
+                assert len(m) == len(pm), (
+                    f"{ds}/{st}/{mdl}: {len(m)} tuned rows vs {len(pm)} persistence rows")
                 rmse = float(np.sqrt(((m.y_true - m.y_pred) ** 2).mean()))
                 r2 = 1 - ((m.y_true - m.y_pred) ** 2).sum() / ((m.y_true - m.y_true.mean()) ** 2).sum()
                 out_rows.append(dict(dataset=ds, model=mdl, station=st, r2=r2,
