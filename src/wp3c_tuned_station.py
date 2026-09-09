@@ -109,7 +109,9 @@ def run(ds, d, spec, station_name, seed):
             try:
                 pred, cfg = fit_tuned(mdl, seed, Xtr, ytr, Xte, d, tr)
                 out[mdl] = (pred, cfg)
-            except Exception:
+            except Exception as exc:  # context logged; row-count assert fails loudly
+                print(f"[tuned] FAILED {ds}/{station_name}/{v}/{t}/{s}/{p}/seed{seed} "
+                      f"{mdl} {type(exc).__name__}: {exc}", flush=True)
                 out[mdl] = (None, None)
         return te, out
 

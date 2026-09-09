@@ -342,7 +342,9 @@ def run_cell(ds: str, spec: Spec, d, validation: str, timing: str, subcomp, prep
         for model in MODELS:
             try:
                 out[model] = fit_one_model(model, seed, Xtr, ytr, Xte, dd, tr, te)
-            except Exception:
+            except Exception as exc:  # context logged; coverage assert fails loudly
+                log.append((model, f"FAILED {validation}/{timing}/{subcomp}/"
+                                   f"{preproc}/seed{seed} {type(exc).__name__}: {exc}"))
                 out[model] = None
         return te, out
 
